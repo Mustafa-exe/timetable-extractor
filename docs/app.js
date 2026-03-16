@@ -70,7 +70,7 @@ function detectDay(text, fallbackIndex) {
 function isRoomToken(text) {
   const value = normalize(text);
   if (!value) return false;
-  return /^(?:[A-Z]-\d{2,4}[A-Z]?|Lab\s*\d+|Physics\s*Lab|YADNOM)$/i.test(value);
+  return /^(?:[A-Z]-\d{2,4}[A-Z]?|Lab|Physics|YADNOM|\d+)$/i.test(value);
 }
 
 function isTimeToken(text) {
@@ -90,6 +90,106 @@ function extractSection(subjectText) {
 
 function extractSubjectName(subjectText) {
   return normalize(subjectText.replace(/\(([^)]+)\)/g, "").trim());
+}
+
+function bucketItemsByY(items, step = 3) {
+  const rows = new Map();
+  for (const item of items) {
+    const key = Math.round(item.y / step) * step;
+    if (!rows.has(key)) rows.set(key, []);
+    rows.get(key).push(item);
+  }
+  return [...rows.entries()]
+    .map(([y, rowItems]) => ({ y, items: rowItems.sort((a, b) => a.x - b.x) }))
+    .sort((a, b) => b.y - a.y);
+}
+
+function parseRoomLabel(rowItems) {
+  const leftTokens = rowItems.filter((item) => item.x < 95).map((item) => item.str);
+  const text = normalize(leftTokens.join(" "));
+  if (!text) return null;
+
+  const direct = text.match(/([A-Z]-\d{2,4}[A-Z]?)/);
+  if (direct) return direct[1];
+
+  const lab = text.match(/Lab\s*(\d+)/i);
+  if (lab) return `Lab ${lab[1]}`;
+
+  if (/Physics\s*Lab/i.test(text)) return "Physics Lab";
+  if (/YADNOM/i.test(text)) return "YADNOM";
+
+  return null;
+}
+
+function splitByXGap(words, threshold = 22) {
+  if (!words.length) return [];
+  const chunks = [];
+  let current = [words[0]];
+
+  for (let idx = 1; idx < words.length; idx += 1) {
+    const prev = words[idx - 1];
+    const next = words[idx];
+    if (next.x - prev.x > threshold) {
+      chunks.push(current);
+      current = [next];
+    } else {
+      current.push(next);
+    }
+  }
+  chunks.push(current);
+
+  return chunks.map((chunk) => ({
+    xStart: chunk[0].x,
+    xEnd: chunk[chunk.length - 1].x + (chunk[chunk.length - 1].width || 8),
+    text: normalize(chunk.map((item) => item.str).join(" ")),
+  }));
+}
+
+function findTimeScale(items) {
+  const timeItems = items.filter((item) => isTimeToken(item.str));
+  const timeRows = bucketItemsByY(timeItems, 2);
+  if (!timeRows.length) return null;
+
+  const strongestRow = timeRows.reduce((best, row) => (row.items.length > best.items.length ? row : best), timeRows[0]);
+  const points = strongestRow.items
+    .map((item) => ({ x: item.x, minute: toMinutes(item.str) }))
+    .filter((item) => item.minute !== null)
+    .sort((a, b) => a.x - b.x);
+
+  if (points.length < 2) return null;
+
+  const uniquePoints = [];
+  for (const point of points) {
+    const last = uniquePoints[uniquePoints.length - 1];
+    if (!last || Math.abs(last.x - point.x) > 2) {
+      uniquePoints.push(point);
+    }
+  }
+
+  if (uniquePoints.length < 2) return null;
+
+  const centers = uniquePoints.map((item) => item.x);
+  const avgGap = centers.slice(1).reduce((sum, x, idx) => sum + (x - centers[idx]), 0) / (centers.length - 1);
+  const boundaries = [centers[0] - avgGap / 2];
+  for (let idx = 0; idx < centers.length - 1; idx += 1) {
+    boundaries.push((centers[idx] + centers[idx + 1]) / 2);
+  }
+  boundaries.push(centers[centers.length - 1] + avgGap / 2);
+
+  return {
+    boundaries,
+    minutes: uniquePoints.map((item) => item.minute),
+    headerY: strongestRow.y,
+  };
+}
+
+function findSlotIndex(x, boundaries) {
+  for (let idx = 0; idx < boundaries.length - 1; idx += 1) {
+    if (x >= boundaries[idx] && x < boundaries[idx + 1]) {
+      return idx;
+    }
+  }
+  return boundaries.length - 2;
 }
 
 function groupLines(items) {
@@ -123,96 +223,98 @@ async function parsePdf(file) {
         str: normalize(item.str),
         x: item.transform[4],
         y: item.transform[5],
+        width: item.width || 8,
       }))
       .filter((item) => item.str);
 
     const lines = groupLines(content.items);
     const day = detectDay(lines.join(" "), pageNumber - 1);
+    const timeScale = findTimeScale(allItems);
+    if (!timeScale) continue;
 
-    const timeItems = allItems.filter((item) => isTimeToken(item.str)).sort((a, b) => a.x - b.x);
-    const minuteMarks = [...new Map(timeItems.map((item) => [item.x, toMinutes(item.str)])).entries()]
-      .filter(([, minute]) => minute !== null)
-      .sort((a, b) => a[0] - b[0]);
+    const roomRows = bucketItemsByY(
+      allItems.filter((item) => item.y < timeScale.headerY - 6 && isRoomToken(item.str) && item.x < 95),
+      4
+    )
+      .map((row) => ({ y: row.y, room: parseRoomLabel(row.items) }))
+      .filter((row) => row.room);
 
-    let slotBoundaries = [];
-    if (minuteMarks.length >= 2) {
-      const firstMinute = minuteMarks[0][1];
-      const xPoints = minuteMarks.map(([x]) => x);
-      const avgGap = xPoints.slice(1).reduce((sum, x, idx) => sum + (x - xPoints[idx]), 0) / (xPoints.length - 1);
-      slotBoundaries = xPoints.map((x, idx) => ({ x, minute: firstMinute + idx * 20 }));
-      slotBoundaries.push({ x: xPoints[xPoints.length - 1] + avgGap, minute: firstMinute + xPoints.length * 20 });
-    } else {
-      slotBoundaries = Array.from({ length: 34 }, (_, idx) => ({ x: 100 + idx * 30, minute: 8 * 60 + idx * 20 }));
-    }
+    if (!roomRows.length) continue;
 
-    const rows = new Map();
-    for (const item of allItems) {
-      const key = Math.round(item.y / 6) * 6;
-      if (!rows.has(key)) rows.set(key, []);
-      rows.get(key).push(item);
-    }
+    roomRows.sort((a, b) => b.y - a.y);
+    const avgRowGap =
+      roomRows.length > 1
+        ? roomRows.slice(1).reduce((sum, row, idx) => sum + (roomRows[idx].y - row.y), 0) / (roomRows.length - 1)
+        : 22;
 
-    const sortedRows = [...rows.entries()].sort((a, b) => b[0] - a[0]);
+    for (let rowIndex = 0; rowIndex < roomRows.length; rowIndex += 1) {
+      const row = roomRows[rowIndex];
+      const nextRow = roomRows[rowIndex + 1];
+      const bandTop = row.y + 4;
+      const bandBottom = nextRow ? nextRow.y + 4 : row.y - avgRowGap;
 
-    for (const [rowY, rowItemsRaw] of sortedRows) {
-      const rowItems = rowItemsRaw.sort((a, b) => a.x - b.x);
-      const roomCell = rowItems.find((item) => isRoomToken(item.str));
-      if (!roomCell) continue;
+      const bandItems = allItems
+        .filter((item) => item.x > timeScale.boundaries[0] - 2 && item.y <= bandTop && item.y > bandBottom)
+        .sort((a, b) => b.y - a.y || a.x - b.x);
 
-      const room = roomCell.str;
-      const subjects = rowItems.filter((item) => isSubjectToken(item.str));
-      if (!subjects.length) continue;
+      if (!bandItems.length) continue;
 
-      const teacherRow = sortedRows.find(([candidateY]) => Math.abs(candidateY - rowY) >= 5 && Math.abs(candidateY - rowY) <= 22);
-      const teacherItems = teacherRow ? teacherRow[1] : [];
+      const bandLines = bucketItemsByY(bandItems, 2);
+      const subjectLine =
+        bandLines.find((line) => line.items.some((item) => /\([^)]+\)/.test(item.str))) ||
+        bandLines[0];
 
-      for (let idx = 0; idx < subjects.length; idx += 1) {
-        const current = subjects[idx];
-        const next = subjects[idx + 1];
+      if (!subjectLine) continue;
 
-        const startBoundaryIndex = slotBoundaries.findIndex((slot, sIdx) => {
-          const nextSlot = slotBoundaries[sIdx + 1];
-          return nextSlot && current.x >= slot.x && current.x < nextSlot.x;
-        });
+      const subjectChunks = splitByXGap(subjectLine.items, 24).filter((chunk) => /\([^)]+\)/.test(chunk.text));
+      if (!subjectChunks.length) continue;
 
-        const fallbackStart = Math.max(0, startBoundaryIndex);
-        let endBoundaryIndex = fallbackStart + 1;
+      const nonSubjectLineWords = bandLines
+        .filter((line) => line.y !== subjectLine.y)
+        .flatMap((line) => line.items)
+        .sort((a, b) => a.x - b.x);
 
-        if (next) {
-          const nextStartIndex = slotBoundaries.findIndex((slot, sIdx) => {
-            const nextSlot = slotBoundaries[sIdx + 1];
-            return nextSlot && next.x >= slot.x && next.x < nextSlot.x;
-          });
-          if (nextStartIndex > fallbackStart) {
-            endBoundaryIndex = nextStartIndex;
-          }
-        }
+      for (let idx = 0; idx < subjectChunks.length; idx += 1) {
+        const chunk = subjectChunks[idx];
+        const nextChunk = subjectChunks[idx + 1];
+        const startX = chunk.xStart;
+        const endX = nextChunk ? nextChunk.xStart : timeScale.boundaries[timeScale.boundaries.length - 1] - 1;
 
-        endBoundaryIndex = Math.min(endBoundaryIndex, slotBoundaries.length - 1);
-        const startMinute = slotBoundaries[fallbackStart]?.minute ?? 8 * 60;
-        const endMinute = slotBoundaries[endBoundaryIndex]?.minute ?? startMinute + 20;
+        const startIdx = Math.max(0, findSlotIndex(startX, timeScale.boundaries));
+        const nextIdx = Math.max(startIdx + 1, findSlotIndex(Math.max(startX + 1, endX - 1), timeScale.boundaries) + 1);
+        const safeEndIdx = Math.min(nextIdx, timeScale.minutes.length);
+        const startMinute = timeScale.minutes[startIdx] ?? 8 * 60;
+        const endMinute = timeScale.minutes[safeEndIdx] ?? startMinute + 20;
 
-        const subjectXMax = next ? next.x : current.x + 140;
-        const teacher = teacherItems
-          .filter((item) => item.x >= current.x - 10 && item.x <= subjectXMax + 20)
-          .map((item) => item.str)
-          .join(" ")
-          .replace(/\s+/g, " ")
-          .trim();
+        const teacher = normalize(
+          nonSubjectLineWords
+            .filter((item) => item.x >= startX - 8 && item.x < endX + 8)
+            .map((item) => item.str)
+            .join(" ")
+        );
 
         entries.push({
           day,
           time: formatRange(startMinute, Math.max(endMinute, startMinute + 20)),
-          section: extractSection(current.str),
-          subject: extractSubjectName(current.str),
-          room,
+          section: extractSection(chunk.text),
+          subject: extractSubjectName(chunk.text),
+          room: row.room,
           teacher,
         });
       }
     }
   }
 
-  return entries;
+  const deduped = [];
+  const seen = new Set();
+  for (const entry of entries) {
+    const key = [entry.day, entry.time, entry.room, entry.subject, entry.section, entry.teacher].join("|");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(entry);
+  }
+
+  return deduped;
 }
 
 function filterEntries(entries, value) {
