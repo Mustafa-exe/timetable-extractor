@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Timetable Extractor</title>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  </head>
+  <body>
+    <div class="loader" aria-live="assertive" aria-busy="true">
+      <span class="loader__spinner" aria-hidden="true"></span>
+      <p>Parsing timetable…</p>
+    </div>
+
+    <header class="app-bar">
+      <div class="brand">
+        <div class="brand__icon" aria-hidden="true">◌</div>
+        <div>
+          <p class="brand__eyebrow">RSCI Studio</p>
+          <h1>Timetable Extractor</h1>
+        </div>
+      </div>
+      <nav class="top-nav" aria-label="Primary">
+        <a class="top-nav__link {% if request.endpoint == 'index' %}is-active{% endif %}" href="{{ url_for('index') }}">Extractor</a>
+        <a class="top-nav__link {% if request.endpoint == 'saved' %}is-active{% endif %}" href="{{ url_for('saved') }}">
+          Library
+          {% if saved_total %}
+          <span class="top-nav__count">{{ saved_total }}</span>
+          {% endif %}
+        </a>
+      </nav>
+    </header>
+
+    <main class="page">
+      {% with messages = get_flashed_messages() %}
+      {% if messages %}
+      <div class="snackbar" role="status">
+        {% for message in messages %}
+        <p>{{ message }}</p>
+        {% endfor %}
+      </div>
+      {% endif %}
+      {% endwith %}
+
+      <section class="grid">
+        <form class="surface upload-form" method="POST" enctype="multipart/form-data">
+          <div class="input-field">
+            <label for="timetable">Upload timetable PDF</label>
+            <div class="file-control" data-file-control data-has-file="false">
+              <input id="timetable" type="file" name="timetable" accept="application/pdf" />
+              <div class="file-control__content">
+                <span class="file-control__button">Choose file</span>
+                <span class="file-control__name" data-file-name>No file selected</span>
+              </div>
+            </div>
+            <p class="helper">Upload once per session, then search different classes without re-uploading.</p>
+            {% if active_filename %}
+            <p class="helper">Current session PDF: <strong>{{ active_filename }}</strong></p>
+            {% endif %}
+          </div>
+
+          <div class="input-field">
+            <label for="class_filter">Class or section focus</label>
+            <input
+              id="class_filter"
+              name="class_filter"
+              list="class-presets"
+              placeholder="e.g., BSCS-6B"
+              value="{{ class_filter or '' }}"
+            />
+            <datalist id="class-presets">
+              <option value="BSCS-6A"></option>
+              <option value="BSCS-6B"></option>
+              <option value="BSIT-4C"></option>
+              <option value="BBA-3A"></option>
+              <option value="MBA-2"></option>
+            </datalist>
+            <p class="helper">Leave blank to parse everything or focus on a single cohort in seconds.</p>
+          </div>
+
+          <div class="tips-card">
+            <p>Tips</p>
+            <ul>
+              <li>Supports merged cells, labs, and day-wise grids.</li>
+              <li>Uploads stay local; clear the session anytime.</li>
+              <li>Best accuracy when the PDF keeps selectable text.</li>
+            </ul>
+          </div>
+
+          <div class="form-actions">
+            <button type="submit">Extract timetable</button>
+            <button type="button" class="ghost-btn" data-clear-form>Clear search</button>
+            <p class="helper">The loader fades once parsing is complete—save results if you want to revisit them later.</p>
+          </div>
+        </form>
+
+        <section
+          id="results"
+          class="surface results-card"
+          data-results-ready="{{ 'true' if timetable else 'false' }}"
+        >
+          <div class="results__header">
+            <div>
+              <p class="eyebrow">Live preview</p>
+              {% if class_filter %}
+              <h2>{{ class_filter }} schedule</h2>
+              {% else %}
+              <h2>All detected sessions</h2>
+              {% endif %}
+            </div>
+            {% if timetable and download_token %}
+            <div class="result-actions">
+              <form method="POST" action="{{ url_for('save_timetable', token=download_token) }}">
+                <input type="hidden" name="save_label" value="{{ class_filter or '' }}" />
+                <input type="hidden" name="class_filter" value="{{ class_filter or '' }}" />
+                <button type="submit" class="ghost-btn">Save to library</button>
+              </form>
+              <a class="secondary-btn" href="{{ url_for('download', token=download_token) }}">Download CSV</a>
+            </div>
+            {% endif %}
+          </div>
+
+          {% if timetable %}
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Day</th>
+                  <th>Time</th>
+                  <th>Section</th>
+                  <th>Subject</th>
+                  <th>Room</th>
+                  <th>Teacher</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in timetable %}
+                <tr>
+                  <td>{{ row.day }}</td>
+                  <td>{{ row.time }}</td>
+                  <td>{{ row.section or '—' }}</td>
+                  <td>{{ row.subject }}</td>
+                  <td>{{ row.room }}</td>
+                  <td>{{ row.teacher }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% else %}
+          <div class="placeholder">
+            <h3>Awaiting your PDF</h3>
+            <p>Upload a timetable and we will surface every session with glassy minimal polish.</p>
+            {% if class_filter %}
+            <div class="chip">Filtering for {{ class_filter }}</div>
+            {% endif %}
+            <ul>
+              <li>Use class filter for faster parsing.</li>
+              <li>CSV mirrors the table view.</li>
+              <li>Works for day-by-day or full-week PDFs.</li>
+            </ul>
+            <a class="inline-link" href="{{ url_for('saved') }}">Visit your saved library</a>
+          </div>
+          {% endif %}
+        </section>
+      </section>
+    </main>
+
+    <script>
+      const fileInput = document.querySelector('#timetable');
+      const fileNameEl = document.querySelector('[data-file-name]');
+      const fileControl = document.querySelector('[data-file-control]');
+      if (fileInput && fileNameEl && fileControl) {
+        fileInput.addEventListener('change', () => {
+          const file = fileInput.files && fileInput.files[0];
+          fileNameEl.textContent = file ? file.name : 'No file selected';
+          fileControl.dataset.hasFile = file ? 'true' : 'false';
+        });
+      }
+
+      const form = document.querySelector('.upload-form');
+      if (form) {
+        form.addEventListener('submit', () => {
+          document.body.classList.add('is-loading');
+        });
+      }
+
+      const results = document.querySelector('[data-results-ready="true"]');
+      if (results) {
+        results.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+
+      const clearButton = document.querySelector('[data-clear-form]');
+      if (clearButton) {
+        clearButton.addEventListener('click', () => {
+          const formEl = document.querySelector('.upload-form');
+          if (formEl) {
+            formEl.reset();
+          }
+          if (fileNameEl) {
+            fileNameEl.textContent = 'No file selected';
+          }
+          if (fileControl) {
+            fileControl.dataset.hasFile = 'false';
+          }
+          const classFilter = document.querySelector('#class_filter');
+          if (classFilter) {
+            classFilter.value = '';
+          }
+        });
+      }
+    </script>
+  </body>
+</html>

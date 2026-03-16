@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Saved Timetables</title>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  </head>
+  <body class="saved-page">
+    <header class="app-bar">
+      <div class="brand">
+        <div class="brand__icon" aria-hidden="true">◌</div>
+        <div>
+          <p class="brand__eyebrow">RSCI Studio</p>
+          <h1>Saved Library</h1>
+        </div>
+      </div>
+      <nav class="top-nav" aria-label="Primary">
+        <a class="top-nav__link {% if request.endpoint == 'index' %}is-active{% endif %}" href="{{ url_for('index') }}">Extractor</a>
+        <a class="top-nav__link {% if request.endpoint == 'saved' %}is-active{% endif %}" href="{{ url_for('saved') }}">
+          Library
+          {% if saved_items %}
+          <span class="top-nav__count">{{ saved_items|length }}</span>
+          {% endif %}
+        </a>
+      </nav>
+    </header>
+
+    <main class="page">
+      {% with messages = get_flashed_messages() %}
+      {% if messages %}
+      <div class="snackbar" role="status">
+        {% for message in messages %}
+        <p>{{ message }}</p>
+        {% endfor %}
+      </div>
+      {% endif %}
+      {% endwith %}
+
+      <section class="surface" aria-labelledby="library-intro">
+        <p class="eyebrow" id="library-intro">Glassy stack</p>
+        <h2>Every saved schedule in one calm place.</h2>
+        <p class="helper">Keep multiple class exports handy without crowding the main extractor. Download or review any card below.</p>
+      </section>
+
+      {% if saved_items %}
+      <section class="library-cards">
+        {% for item in saved_items %}
+        <article
+          class="library-card"
+          id="saved-{{ item.id }}"
+          data-highlight="{{ 'true' if highlight == item.id else 'false' }}"
+        >
+          <div class="library-card__header">
+            <div class="library-card__meta">
+              <p class="eyebrow">{{ item.label }}</p>
+              <h2>{{ item.entries|length }} sessions</h2>
+              <p class="helper">Saved on {{ item.timestamp.strftime('%b %d, %Y %H:%M') }} UTC</p>
+            </div>
+            <div class="library-card__actions">
+              <a class="secondary-btn" href="{{ url_for('download_saved', library_id=item.id) }}">Download CSV</a>
+              <a class="ghost-btn" href="{{ url_for('index') }}">Load another PDF</a>
+            </div>
+          </div>
+          <div class="table-scroll" aria-label="Saved timetable for {{ item.label }}">
+            <table>
+              <thead>
+                <tr>
+                  <th>Day</th>
+                  <th>Time</th>
+                  <th>Section</th>
+                  <th>Subject</th>
+                  <th>Room</th>
+                  <th>Teacher</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in item.entries %}
+                <tr>
+                  <td>{{ row.day }}</td>
+                  <td>{{ row.time }}</td>
+                  <td>{{ row.section or '—' }}</td>
+                  <td>{{ row.subject }}</td>
+                  <td>{{ row.room }}</td>
+                  <td>{{ row.teacher }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </article>
+        {% endfor %}
+      </section>
+      {% else %}
+      <div class="placeholder">
+        <h3>Your library is empty</h3>
+        <p>Run an extraction, tap “Save to library”, and it will appear here as a glass card.</p>
+        <a class="inline-link" href="{{ url_for('index') }}">Back to extractor</a>
+      </div>
+      {% endif %}
+    </main>
+
+    <script>
+      const highlightId = "{{ highlight or '' }}";
+      if (highlightId) {
+        const card = document.getElementById(`saved-${highlightId}`);
+        if (card) {
+          card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }
+    </script>
+  </body>
+</html>
