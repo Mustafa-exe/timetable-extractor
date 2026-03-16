@@ -38,6 +38,27 @@ function normalize(text) {
   return (text || "").replace(/\s+/g, " ").trim();
 }
 
+function toMinutes(label) {
+  const match = normalize(label).match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  return hour * 60 + minute;
+}
+
+function toAmPm(totalMinutes) {
+  let hour = Math.floor(totalMinutes / 60);
+  const minute = totalMinutes % 60;
+  const suffix = hour >= 12 ? "PM" : "AM";
+  hour %= 12;
+  if (hour === 0) hour = 12;
+  return `${hour}:${String(minute).padStart(2, "0")} ${suffix}`;
+}
+
+function formatRange(start, end) {
+  return `${toAmPm(start)} - ${toAmPm(end)}`;
+}
+
 function detectDay(text, fallbackIndex) {
   const upper = text.toUpperCase();
   for (const day of DAYS) {
@@ -46,44 +67,29 @@ function detectDay(text, fallbackIndex) {
   return DAYS[fallbackIndex] || `Day ${fallbackIndex + 1}`;
 }
 
-function parseSessionLine(rawLine, day) {
-  const line = normalize(rawLine);
-  if (!line) return null;
+function isRoomToken(text) {
+  const value = normalize(text);
+  if (!value) return false;
+  return /^(?:[A-Z]-\d{2,4}[A-Z]?|Lab\s*\d+|Physics\s*Lab|YADNOM)$/i.test(value);
+}
 
-  const timeMatch = line.match(/(\d{1,2}:\d{2}\s*(?:AM|PM)\s*[-–]\s*\d{1,2}:\d{2}\s*(?:AM|PM))/i);
-  if (!timeMatch) return null;
+function isTimeToken(text) {
+  return /^\d{1,2}:\d{2}$/.test(normalize(text));
+}
 
-  const time = normalize(timeMatch[1].replace("–", "-"));
+function isSubjectToken(text) {
+  const value = normalize(text);
+  if (!value) return false;
+  return /\([^)]+\)/.test(value) && !isTimeToken(value) && !isRoomToken(value);
+}
 
-  const sectionMatch = line.match(/\(([A-Za-z0-9-]+)\)/);
-  const section = sectionMatch ? normalize(sectionMatch[1]) : "";
+function extractSection(subjectText) {
+  const match = subjectText.match(/\(([^)]+)\)/);
+  return match ? normalize(match[1]) : "";
+}
 
-  const roomMatch = line.match(/\b([A-Z]{1,5}-?\d{1,4}[A-Z]?)\b/);
-  const room = roomMatch ? normalize(roomMatch[1]) : "";
-
-  let cleaned = line
-    .replace(timeMatch[0], "")
-    .replace(sectionMatch ? sectionMatch[0] : "", "")
-    .replace(roomMatch ? roomMatch[0] : "")
-    .replace(/\s{2,}/g, " ")
-    .trim();
-
-  let subject = cleaned;
-  let teacher = "";
-
-  if (cleaned.includes("|")) {
-    const [sub, tea] = cleaned.split("|");
-    subject = normalize(sub);
-    teacher = normalize(tea);
-  } else if (cleaned.includes(" - ")) {
-    const parts = cleaned.split(" - ");
-    subject = normalize(parts.slice(0, -1).join(" - "));
-    teacher = normalize(parts[parts.length - 1]);
-  }
-
-  if (!subject) return null;
-
-  return { day, time, section, subject, room, teacher };
+function extractSubjectName(subjectText) {
+  return normalize(subjectText.replace(/\(([^)]+)\)/g, "").trim());
 }
 
 function groupLines(items) {
@@ -112,12 +118,97 @@ async function parsePdf(file) {
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
     const page = await pdf.getPage(pageNumber);
     const content = await page.getTextContent();
+    const allItems = content.items
+      .map((item) => ({
+        str: normalize(item.str),
+        x: item.transform[4],
+        y: item.transform[5],
+      }))
+      .filter((item) => item.str);
+
     const lines = groupLines(content.items);
     const day = detectDay(lines.join(" "), pageNumber - 1);
 
-    for (const line of lines) {
-      const entry = parseSessionLine(line, day);
-      if (entry) entries.push(entry);
+    const timeItems = allItems.filter((item) => isTimeToken(item.str)).sort((a, b) => a.x - b.x);
+    const minuteMarks = [...new Map(timeItems.map((item) => [item.x, toMinutes(item.str)])).entries()]
+      .filter(([, minute]) => minute !== null)
+      .sort((a, b) => a[0] - b[0]);
+
+    let slotBoundaries = [];
+    if (minuteMarks.length >= 2) {
+      const firstMinute = minuteMarks[0][1];
+      const xPoints = minuteMarks.map(([x]) => x);
+      const avgGap = xPoints.slice(1).reduce((sum, x, idx) => sum + (x - xPoints[idx]), 0) / (xPoints.length - 1);
+      slotBoundaries = xPoints.map((x, idx) => ({ x, minute: firstMinute + idx * 20 }));
+      slotBoundaries.push({ x: xPoints[xPoints.length - 1] + avgGap, minute: firstMinute + xPoints.length * 20 });
+    } else {
+      slotBoundaries = Array.from({ length: 34 }, (_, idx) => ({ x: 100 + idx * 30, minute: 8 * 60 + idx * 20 }));
+    }
+
+    const rows = new Map();
+    for (const item of allItems) {
+      const key = Math.round(item.y / 6) * 6;
+      if (!rows.has(key)) rows.set(key, []);
+      rows.get(key).push(item);
+    }
+
+    const sortedRows = [...rows.entries()].sort((a, b) => b[0] - a[0]);
+
+    for (const [rowY, rowItemsRaw] of sortedRows) {
+      const rowItems = rowItemsRaw.sort((a, b) => a.x - b.x);
+      const roomCell = rowItems.find((item) => isRoomToken(item.str));
+      if (!roomCell) continue;
+
+      const room = roomCell.str;
+      const subjects = rowItems.filter((item) => isSubjectToken(item.str));
+      if (!subjects.length) continue;
+
+      const teacherRow = sortedRows.find(([candidateY]) => Math.abs(candidateY - rowY) >= 5 && Math.abs(candidateY - rowY) <= 22);
+      const teacherItems = teacherRow ? teacherRow[1] : [];
+
+      for (let idx = 0; idx < subjects.length; idx += 1) {
+        const current = subjects[idx];
+        const next = subjects[idx + 1];
+
+        const startBoundaryIndex = slotBoundaries.findIndex((slot, sIdx) => {
+          const nextSlot = slotBoundaries[sIdx + 1];
+          return nextSlot && current.x >= slot.x && current.x < nextSlot.x;
+        });
+
+        const fallbackStart = Math.max(0, startBoundaryIndex);
+        let endBoundaryIndex = fallbackStart + 1;
+
+        if (next) {
+          const nextStartIndex = slotBoundaries.findIndex((slot, sIdx) => {
+            const nextSlot = slotBoundaries[sIdx + 1];
+            return nextSlot && next.x >= slot.x && next.x < nextSlot.x;
+          });
+          if (nextStartIndex > fallbackStart) {
+            endBoundaryIndex = nextStartIndex;
+          }
+        }
+
+        endBoundaryIndex = Math.min(endBoundaryIndex, slotBoundaries.length - 1);
+        const startMinute = slotBoundaries[fallbackStart]?.minute ?? 8 * 60;
+        const endMinute = slotBoundaries[endBoundaryIndex]?.minute ?? startMinute + 20;
+
+        const subjectXMax = next ? next.x : current.x + 140;
+        const teacher = teacherItems
+          .filter((item) => item.x >= current.x - 10 && item.x <= subjectXMax + 20)
+          .map((item) => item.str)
+          .join(" ")
+          .replace(/\s+/g, " ")
+          .trim();
+
+        entries.push({
+          day,
+          time: formatRange(startMinute, Math.max(endMinute, startMinute + 20)),
+          section: extractSection(current.str),
+          subject: extractSubjectName(current.str),
+          room,
+          teacher,
+        });
+      }
     }
   }
 
