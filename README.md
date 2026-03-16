@@ -47,3 +47,26 @@ A lightweight Flask app that ingests a PDF timetable and surfaces each session w
 - This repo also includes a `Procfile` with:
    - `web: waitress-serve --listen=0.0.0.0:$PORT app:app`
 - On platforms that support Procfiles, use that as the start process.
+
+## Deploy (GitHub Pages - Free)
+
+This repo now includes a static browser version in `docs/` for free hosting on GitHub Pages.
+
+1. Push your latest `main` branch (already done in this project).
+2. Open your repository on GitHub.
+3. Go to **Settings** → **Pages**.
+4. Under **Build and deployment**, choose:
+   - **Source**: `Deploy from a branch`
+   - **Branch**: `main`
+   - **Folder**: `/docs`
+5. Save and wait ~1–3 minutes.
+
+Your site URL will be:
+
+- `https://mustafa-exe.github.io/timetable-extractor/`
+
+### GitHub Pages notes
+
+- The Pages app is fully client-side (no Flask backend).
+- PDF parsing, filtering, CSV export, and saved library run in-browser.
+- Saved library is stored in `localStorage` for that browser/device only.

@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Timetable Extractor</title>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header class="app-bar">
+      <div class="brand">
+        <div class="brand__icon" aria-hidden="true">◌</div>
+        <div>
+          <p class="brand__eyebrow">RSCI Studio</p>
+          <h1>Timetable Extractor</h1>
+        </div>
+      </div>
+      <nav class="top-nav" aria-label="Primary">
+        <button class="top-nav__link is-active" data-tab="extractor">Extractor</button>
+        <button class="top-nav__link" data-tab="library">Library <span class="top-nav__count" data-library-count>0</span></button>
+      </nav>
+    </header>
+
+    <main class="page">
+      <section class="grid" data-panel="extractor">
+        <form class="surface upload-form" id="extract-form">
+          <div class="input-field">
+            <label for="timetable">Upload timetable PDF</label>
+            <div class="file-control" data-file-control data-has-file="false">
+              <input id="timetable" type="file" accept="application/pdf" required />
+              <div class="file-control__content">
+                <span class="file-control__button">Choose file</span>
+                <span class="file-control__name" data-file-name>No file selected</span>
+              </div>
+            </div>
+            <p class="helper" data-session-file>Upload once, then search different classes instantly.</p>
+          </div>
+
+          <div class="input-field">
+            <label for="class_filter">Class or section focus</label>
+            <input id="class_filter" list="class-presets" placeholder="e.g., BSCS-6B" />
+            <datalist id="class-presets">
+              <option value="BSCS-6A"></option>
+              <option value="BSCS-6B"></option>
+              <option value="BSIT-4C"></option>
+              <option value="BBA-3A"></option>
+              <option value="MBA-2"></option>
+            </datalist>
+            <p class="helper">Leave blank to view all extracted sessions.</p>
+          </div>
+
+          <div class="tips-card">
+            <p>Tips</p>
+            <ul>
+              <li>Works best on text-based PDFs (not scanned images).</li>
+              <li>All processing runs in your browser; nothing is uploaded.</li>
+              <li>Save important results to Library for quick recall.</li>
+            </ul>
+          </div>
+
+          <div class="form-actions">
+            <button type="submit" id="extract-btn">Extract timetable</button>
+            <button type="button" class="ghost-btn" id="clear-btn">Clear search</button>
+          </div>
+        </form>
+
+        <section class="surface results-card">
+          <div class="results__header">
+            <div>
+              <p class="eyebrow">Live preview</p>
+              <h2 id="results-title">All detected sessions</h2>
+            </div>
+            <div class="result-actions">
+              <button type="button" class="ghost-btn" id="save-btn" disabled>Save to library</button>
+              <button type="button" class="secondary-btn" id="download-btn" disabled>Download CSV</button>
+            </div>
+          </div>
+
+          <div class="placeholder" id="placeholder">
+            <h3>Awaiting your PDF</h3>
+            <p>Upload a timetable to extract sessions and then filter by class/section.</p>
+          </div>
+
+          <div class="table-scroll" id="results-wrap" hidden>
+            <table>
+              <thead>
+                <tr>
+                  <th>Day</th>
+                  <th>Time</th>
+                  <th>Section</th>
+                  <th>Subject</th>
+                  <th>Room</th>
+                  <th>Teacher</th>
+                </tr>
+              </thead>
+              <tbody id="results-body"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section class="surface library-panel" data-panel="library" hidden>
+        <div class="results__header">
+          <div>
+            <p class="eyebrow">Saved library</p>
+            <h2>Stored timetables</h2>
+          </div>
+        </div>
+        <div id="library-empty" class="placeholder">
+          <h3>Your library is empty</h3>
+          <p>Save extracted results to keep them in this browser.</p>
+        </div>
+        <section class="library-cards" id="library-list"></section>
+      </section>
+    </main>
+
+    <div class="loader" id="loader" aria-live="polite" aria-busy="true">
+      <span class="loader__spinner" aria-hidden="true"></span>
+      <p>Parsing timetable…</p>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.6.82/pdf.min.mjs" type="module"></script>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
