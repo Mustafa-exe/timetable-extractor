@@ -105,7 +105,7 @@ function bucketItemsByY(items, step = 3) {
 }
 
 function parseRoomLabel(rowItems) {
-  const leftTokens = rowItems.filter((item) => item.x < 95).map((item) => item.str);
+  const leftTokens = rowItems.filter((item) => item.x < 110).map((item) => item.str);
   const text = normalize(leftTokens.join(" "));
   if (!text) return null;
 
@@ -119,6 +119,10 @@ function parseRoomLabel(rowItems) {
   if (/YADNOM/i.test(text)) return "YADNOM";
 
   return null;
+}
+
+function hasTeacherHint(text) {
+  return /(Mr\.|Ms\.|Dr\.|Prof\.|faculty)/i.test(text);
 }
 
 function splitByXGap(words, threshold = 22) {
@@ -233,7 +237,7 @@ async function parsePdf(file) {
     if (!timeScale) continue;
 
     const roomRows = bucketItemsByY(
-      allItems.filter((item) => item.y < timeScale.headerY - 6 && isRoomToken(item.str) && item.x < 95),
+      allItems.filter((item) => item.x < 110 && isRoomToken(item.str) && !isTimeToken(item.str)),
       4
     )
       .map((row) => ({ y: row.y, room: parseRoomLabel(row.items) }))
@@ -266,19 +270,45 @@ async function parsePdf(file) {
 
       if (!subjectLine) continue;
 
-      const subjectChunks = splitByXGap(subjectLine.items, 24).filter((chunk) => /\([^)]+\)/.test(chunk.text));
+      const anchorChunks = subjectLine.items
+        .filter((item) => /\([^)]+\)/.test(item.str))
+        .map((item) => ({
+          xStart: item.x,
+          xEnd: item.x + (item.width || 100),
+          text: item.str,
+        }));
+
+      const subjectChunks =
+        anchorChunks.length > 0
+          ? anchorChunks
+          : splitByXGap(subjectLine.items, 24).filter((chunk) => /\([^)]+\)/.test(chunk.text));
       if (!subjectChunks.length) continue;
 
-      const nonSubjectLineWords = bandLines
+      const candidateTeacherLines = bandLines
         .filter((line) => line.y !== subjectLine.y)
-        .flatMap((line) => line.items)
-        .sort((a, b) => a.x - b.x);
+        .map((line) => ({
+          ...line,
+          delta: Math.abs(line.y - subjectLine.y),
+          text: normalize(line.items.map((item) => item.str).join(" ")),
+        }))
+        .filter((line) => line.delta >= 4 && line.delta <= 16)
+        .sort((a, b) => a.delta - b.delta);
+
+      const teacherLine =
+        candidateTeacherLines.find((line) => hasTeacherHint(line.text)) ||
+        candidateTeacherLines[0] ||
+        null;
+
+      const teacherWords = teacherLine ? teacherLine.items : [];
 
       for (let idx = 0; idx < subjectChunks.length; idx += 1) {
         const chunk = subjectChunks[idx];
         const nextChunk = subjectChunks[idx + 1];
         const startX = chunk.xStart;
-        const endX = nextChunk ? nextChunk.xStart : timeScale.boundaries[timeScale.boundaries.length - 1] - 1;
+        const endX = Math.max(
+          chunk.xEnd,
+          nextChunk ? Math.min(nextChunk.xStart, chunk.xEnd + 260) : chunk.xEnd
+        );
 
         const startIdx = Math.max(0, findSlotIndex(startX, timeScale.boundaries));
         const nextIdx = Math.max(startIdx + 1, findSlotIndex(Math.max(startX + 1, endX - 1), timeScale.boundaries) + 1);
@@ -287,7 +317,7 @@ async function parsePdf(file) {
         const endMinute = timeScale.minutes[safeEndIdx] ?? startMinute + 20;
 
         const teacher = normalize(
-          nonSubjectLineWords
+          teacherWords
             .filter((item) => item.x >= startX - 8 && item.x < endX + 8)
             .map((item) => item.str)
             .join(" ")
